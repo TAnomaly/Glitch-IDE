@@ -88,16 +88,16 @@ public:
 
         status_message = "INSERT MODE - Ctrl+C: Copy, Ctrl+V: Paste, Ctrl+A: Select All";
 
-        // Font oluştur
-        hFont = CreateFont(16, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
+        // Font oluştur - 0xNerd Proto kalın
+        hFont = CreateFont(16, 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE,
                            ANSI_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
-                           CLEARTYPE_QUALITY, FIXED_PITCH | FF_MODERN, "Consolas");
+                           CLEARTYPE_QUALITY, FIXED_PITCH | FF_MODERN, "0xNerd Proto");
 
-        // Renkler
-        bg_brush = CreateSolidBrush(RGB(30, 30, 30));          // Koyu gri arka plan
-        status_brush = CreateSolidBrush(RGB(0, 120, 215));     // Mavi status bar
-        cursor_brush = CreateSolidBrush(RGB(255, 255, 255));   // Beyaz cursor
-        selection_brush = CreateSolidBrush(RGB(70, 130, 180)); // Seçim rengi
+        // Siyah arka plan ve turuncu metin
+        bg_brush = CreateSolidBrush(RGB(0, 0, 0));           // Tam siyah arka plan
+        status_brush = CreateSolidBrush(RGB(0, 122, 204));   // Mavi status bar
+        cursor_brush = CreateSolidBrush(RGB(255, 165, 0));   // Turuncu cursor
+        selection_brush = CreateSolidBrush(RGB(40, 62, 86)); // Seçim rengi
 
         // Karakter boyutlarını hesapla
         calculateCharSize();
@@ -179,6 +179,17 @@ public:
                 break;
             case 'Z':
                 // Undo işlemi için gelecekte implement edilebilir
+                break;
+            case '1':
+            case '2':
+            case '3':
+            case '4':
+            case '5':
+            case '6':
+            case '7':
+            case '8':
+            case '9':
+                switchToPane(wParam - '1');
                 break;
             default:
                 if (mode == INSERT_MODE)
@@ -701,6 +712,16 @@ public:
         }
     }
 
+    void switchToPane(int pane_index)
+    {
+        if (pane_index >= 0 && pane_index < panes.size())
+        {
+            active_pane = pane_index;
+            updatePanes();
+            status_message = "Switched to pane " + std::to_string(pane_index + 1);
+        }
+    }
+
     void newFile()
     {
         EditorPane new_pane;
@@ -823,9 +844,10 @@ public:
         // Arka planı koyu gri yap
         FillRect(hdc, &client_rect, bg_brush);
 
-        // Font seç
+        // Font seç ve metin ayarlarını yap
         SelectObject(hdc, hFont);
-        SetTextColor(hdc, RGB(220, 220, 220));
+        SetTextColor(hdc, RGB(255, 165, 0)); // Turuncu metin rengi
+        SetBkColor(hdc, RGB(0, 0, 0));       // Siyah arka plan
         SetBkMode(hdc, TRANSPARENT);
 
         // Her pane'i çiz
@@ -843,10 +865,10 @@ public:
         // Pane'in içini koyu gri yap
         FillRect(hdc, &pane.rect, bg_brush);
 
-        // Pane sınırlarını çiz
+        // VS Code panel kenarları
         HPEN border_pen = CreatePen(PS_SOLID,
                                     pane.is_active ? 2 : 1,
-                                    pane.is_active ? RGB(0, 120, 215) : RGB(100, 100, 100));
+                                    pane.is_active ? RGB(0, 122, 204) : RGB(37, 37, 38));
         HPEN old_pen = (HPEN)SelectObject(hdc, border_pen);
 
         Rectangle(hdc, pane.rect.left, pane.rect.top, pane.rect.right, pane.rect.bottom);
@@ -869,8 +891,8 @@ public:
         {
             const std::string &line = pane.lines[i];
 
-            // Satır numarası
-            SetTextColor(hdc, RGB(100, 100, 100));
+            // Gri satır numarası
+            SetTextColor(hdc, RGB(128, 128, 128)); // Gri satır numarası
             std::string line_num = std::to_string(i + 1);
             while (line_num.length() < 4)
                 line_num = " " + line_num;
@@ -882,8 +904,8 @@ public:
                 drawSelection(hdc, pane, i, line_y);
             }
 
-            // Metin
-            SetTextColor(hdc, RGB(220, 220, 220));
+            // Turuncu metin
+            SetTextColor(hdc, RGB(255, 165, 0)); // Turuncu metin rengi
             int text_x = pane.rect.left + 50;
             TextOut(hdc, text_x, line_y, line.c_str(), line.length());
 
@@ -969,6 +991,42 @@ public:
         updatePaneLayout();
         InvalidateRect(hwnd, NULL, FALSE);
     }
+
+    void handleMouseClick(int x, int y)
+    {
+        // Hangi pane'e tıklandığını bul
+        for (int i = 0; i < panes.size(); i++)
+        {
+            if (x >= panes[i].rect.left && x <= panes[i].rect.right &&
+                y >= panes[i].rect.top && y <= panes[i].rect.bottom)
+            {
+                // Bu pane'i aktif yap
+                active_pane = i;
+                updatePanes();
+                status_message = "Clicked on pane " + std::to_string(i + 1);
+
+                // Cursor pozisyonunu güncelle
+                int text_x = panes[i].rect.left + 50;
+                int line_y = panes[i].rect.top + 30;
+                int line_height = char_height + 2;
+
+                if (x >= text_x && y >= line_y)
+                {
+                    int clicked_line = (y - line_y) / line_height + panes[i].scroll_top;
+                    int clicked_col = (x - text_x) / char_width;
+
+                    if (clicked_line >= 0 && clicked_line < panes[i].lines.size())
+                    {
+                        panes[i].cursor_row = clicked_line;
+                        panes[i].cursor_col = std::min(clicked_col, (int)panes[i].lines[clicked_line].length());
+                    }
+                }
+
+                InvalidateRect(hwnd, NULL, FALSE);
+                break;
+            }
+        }
+    }
 };
 
 // Global editör instance
@@ -1012,7 +1070,14 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
     break;
 
     case WM_ERASEBKGND:
+    {
+        RECT client_rect;
+        GetClientRect(hwnd, &client_rect);
+        HBRUSH black_brush = CreateSolidBrush(RGB(0, 0, 0));
+        FillRect((HDC)wParam, &client_rect, black_brush);
+        DeleteObject(black_brush);
         return TRUE;
+    }
 
     case WM_KEYDOWN:
         if (g_editor)
@@ -1025,6 +1090,13 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
         if (g_editor)
         {
             g_editor->handleChar(wParam);
+        }
+        break;
+
+    case WM_LBUTTONDOWN:
+        if (g_editor)
+        {
+            g_editor->handleMouseClick(LOWORD(lParam), HIWORD(lParam));
         }
         break;
 
@@ -1053,7 +1125,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
     WNDCLASS wc = {0};
     wc.lpfnWndProc = WndProc;
     wc.hInstance = hInstance;
-    wc.hbrBackground = NULL;
+    wc.hbrBackground = CreateSolidBrush(RGB(0, 0, 0)); // Siyah arka plan
     wc.lpszClassName = WINDOW_CLASS;
     wc.style = CS_HREDRAW | CS_VREDRAW;
     wc.hCursor = LoadCursor(NULL, IDC_IBEAM);
