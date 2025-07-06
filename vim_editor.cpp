@@ -64,6 +64,26 @@ private:
     std::string status_message;
     std::string clipboard_data;
 
+    // Search & Replace
+    std::string search_text;
+    std::string replace_text;
+    bool search_mode;
+    bool replace_mode;
+    int current_search_result;
+
+    // Undo/Redo system
+    struct UndoState
+    {
+        std::vector<std::string> lines;
+        int cursor_row;
+        int cursor_col;
+        std::string operation;
+    };
+
+    std::vector<UndoState> undo_stack;
+    std::vector<UndoState> redo_stack;
+    int max_undo_levels;
+
     // Font ayarları
     HFONT hFont;
     int char_width;
@@ -80,7 +100,8 @@ private:
     bool ctrl_pressed;
 
 public:
-    ModernTextEditor() : mode(INSERT_MODE), active_pane(0), shift_pressed(false), ctrl_pressed(false)
+    ModernTextEditor() : mode(INSERT_MODE), active_pane(0), shift_pressed(false), ctrl_pressed(false),
+                         search_mode(false), replace_mode(false), current_search_result(-1), max_undo_levels(100)
     {
         // İlk pane'i oluştur
         panes.push_back(EditorPane());
@@ -178,7 +199,16 @@ public:
                 newFile();
                 break;
             case 'Z':
-                // Undo işlemi için gelecekte implement edilebilir
+                performUndo();
+                break;
+            case 'Y':
+                performRedo();
+                break;
+            case 'F':
+                startSearch();
+                break;
+            case 'H':
+                startReplace();
                 break;
             case '1':
             case '2':
@@ -433,7 +463,25 @@ public:
 
     void handleChar(WPARAM wParam)
     {
-        if (mode == INSERT_MODE && wParam >= 32 && wParam <= 126)
+        if (search_mode && wParam != VK_RETURN && wParam != VK_ESCAPE)
+        {
+            search_text += (char)wParam;
+            status_message = "Search: " + search_text;
+        }
+        else if (replace_mode && wParam != VK_RETURN && wParam != VK_ESCAPE)
+        {
+            if (search_text.empty())
+            {
+                search_text += (char)wParam;
+                status_message = "Replace: " + search_text;
+            }
+            else
+            {
+                replace_text += (char)wParam;
+                status_message = "Replace: " + search_text + " -> " + replace_text;
+            }
+        }
+        else if (mode == INSERT_MODE && wParam >= 32 && wParam <= 126)
         {
             if (panes[active_pane].selection.hasSelection())
                 deleteSelection();
@@ -446,6 +494,7 @@ public:
 
     void insertText(const std::string &text)
     {
+        saveUndoState("insert text");
         EditorPane &pane = panes[active_pane];
         pane.lines[pane.cursor_row].insert(pane.cursor_col, text);
         pane.cursor_col += text.length();
@@ -1026,6 +1075,168 @@ public:
                 break;
             }
         }
+    }
+
+    // Search & Replace functions
+    void startSearch()
+    {
+        search_mode = true;
+        replace_mode = false;
+        search_text = "";
+        status_message = "Search: ";
+        mode = COMMAND_MODE;
+    }
+
+    void startReplace()
+    {
+        replace_mode = true;
+        search_mode = false;
+        search_text = "";
+        replace_text = "";
+        status_message = "Replace: ";
+        mode = COMMAND_MODE;
+    }
+
+    void performSearch()
+    {
+        if (search_text.empty())
+            return;
+
+        EditorPane &pane = panes[active_pane];
+        int start_row = pane.cursor_row;
+        int start_col = pane.cursor_col + 1;
+
+        // Mevcut satırdan arama başlat
+        for (int i = start_row; i < pane.lines.size(); i++)
+        {
+            size_t pos = pane.lines[i].find(search_text, (i == start_row) ? start_col : 0);
+            if (pos != std::string::npos)
+            {
+                pane.cursor_row = i;
+                pane.cursor_col = pos;
+                status_message = "Found: " + search_text;
+                return;
+            }
+        }
+
+        // Baştan arama yap
+        for (int i = 0; i <= start_row; i++)
+        {
+            size_t pos = pane.lines[i].find(search_text, 0);
+            if (pos != std::string::npos && (i < start_row || pos < start_col))
+            {
+                pane.cursor_row = i;
+                pane.cursor_col = pos;
+                status_message = "Found: " + search_text;
+                return;
+            }
+        }
+
+        status_message = "Not found: " + search_text;
+    }
+
+    void performReplace()
+    {
+        if (search_text.empty())
+            return;
+
+        EditorPane &pane = panes[active_pane];
+        std::string &current_line = pane.lines[pane.cursor_row];
+
+        size_t pos = current_line.find(search_text, pane.cursor_col);
+        if (pos == pane.cursor_col)
+        {
+            current_line.replace(pos, search_text.length(), replace_text);
+            pane.cursor_col = pos + replace_text.length();
+            pane.modified = true;
+            status_message = "Replaced: " + search_text + " -> " + replace_text;
+        }
+        else
+        {
+            performSearch(); // Sonraki bulguyu bul
+        }
+    }
+
+    // Undo/Redo functions
+    void saveUndoState(const std::string &operation)
+    {
+        EditorPane &pane = panes[active_pane];
+        UndoState state;
+        state.lines = pane.lines;
+        state.cursor_row = pane.cursor_row;
+        state.cursor_col = pane.cursor_col;
+        state.operation = operation;
+
+        undo_stack.push_back(state);
+
+        // Undo stack boyutunu sınırla
+        if (undo_stack.size() > max_undo_levels)
+        {
+            undo_stack.erase(undo_stack.begin());
+        }
+
+        // Redo stack'i temizle
+        redo_stack.clear();
+    }
+
+    void performUndo()
+    {
+        if (undo_stack.empty())
+        {
+            status_message = "Nothing to undo";
+            return;
+        }
+
+        EditorPane &pane = panes[active_pane];
+
+        // Mevcut durumu redo stack'e kaydet
+        UndoState current_state;
+        current_state.lines = pane.lines;
+        current_state.cursor_row = pane.cursor_row;
+        current_state.cursor_col = pane.cursor_col;
+        current_state.operation = "redo";
+        redo_stack.push_back(current_state);
+
+        // Son undo state'i geri yükle
+        UndoState last_state = undo_stack.back();
+        undo_stack.pop_back();
+
+        pane.lines = last_state.lines;
+        pane.cursor_row = last_state.cursor_row;
+        pane.cursor_col = last_state.cursor_col;
+        pane.modified = true;
+
+        status_message = "Undone: " + last_state.operation;
+    }
+
+    void performRedo()
+    {
+        if (redo_stack.empty())
+        {
+            status_message = "Nothing to redo";
+            return;
+        }
+
+        EditorPane &pane = panes[active_pane];
+
+        // Mevcut durumu undo stack'e kaydet
+        UndoState current_state;
+        current_state.lines = pane.lines;
+        current_state.cursor_row = pane.cursor_row;
+        current_state.cursor_col = pane.cursor_col;
+        current_state.operation = "undo";
+        undo_stack.push_back(current_state);
+
+        // Son redo state'i geri yükle
+        UndoState last_state = redo_stack.back();
+        redo_stack.pop_back();
+
+        pane.lines = last_state.lines;
+        pane.cursor_row = last_state.cursor_row;
+        pane.cursor_col = last_state.cursor_col;
+        pane.modified = true;
+
+        status_message = "Redone: " + last_state.operation;
     }
 };
 
