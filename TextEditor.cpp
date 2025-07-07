@@ -5,16 +5,24 @@
 
 ModernTextEditor::ModernTextEditor() : mode(INSERT_MODE), active_pane(0), split_direction(VERTICAL_SPLIT), shift_pressed(false), ctrl_pressed(false),
                                        showFileExplorer(true), showTerminal(true), fileExplorerWidth(200), terminalHeight(150),
-                                       search_mode(false), replace_mode(false), current_search_result(-1), max_undo_levels(100)
+                                       search_mode(false), replace_mode(false), current_search_result(-1), max_undo_levels(100),
+                                       current_font_size(16)
 {
     // İlk pane'i oluştur
     panes.push_back(EditorPane());
     panes[0].is_active = true;
 
+    // Vector'lar için memory reserve et
+    panes.reserve(10);               // Maksimum 10 pane
+    undo_stack.reserve(25);          // Undo stack için
+    redo_stack.reserve(25);          // Redo stack için
+    terminal.output.reserve(150);    // Terminal output için
+    fileExplorer.items.reserve(250); // File explorer için
+
     status_message = "INSERT MODE - Ctrl+C: Copy, Ctrl+V: Paste, Ctrl+A: Select All";
 
     // Font oluştur - 0xNerd Proto kalın
-    hFont = CreateFont(16, 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE,
+    hFont = CreateFont(current_font_size, 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE,
                        ANSI_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
                        CLEARTYPE_QUALITY, FIXED_PITCH | FF_MODERN, TEXT("0xNerd Proto"));
 
@@ -33,8 +41,8 @@ ModernTextEditor::ModernTextEditor() : mode(INSERT_MODE), active_pane(0), split_
     initializeFileExplorer();
 
     // Terminal'i başlat
-    terminal.output.push_back("Glitch IDE Terminal v1.0");
-    terminal.output.push_back("Type 'help' for available commands");
+    terminal.output.push_back("Glitch IDE Terminal");
+    terminal.output.push_back("Type 'help' for commands");
     terminal.output.push_back("");
 }
 
@@ -176,17 +184,59 @@ void ModernTextEditor::handleKeyPress(WPARAM wParam)
         case 'H':
             startReplace();
             break;
+        case 'J':
+            // Toggle terminal (like VS Code)
+            showTerminal = !showTerminal;
+            updatePaneLayout();
+            status_message = showTerminal ? "Terminal shown" : "Terminal hidden";
+            break;
         case 'B':
             // Toggle file explorer (like VS Code)
             showFileExplorer = !showFileExplorer;
             updatePaneLayout();
             status_message = showFileExplorer ? "File Explorer shown" : "File Explorer hidden";
             break;
-        case 'T':
-            // Toggle terminal
-            showTerminal = !showTerminal;
-            updatePaneLayout();
-            status_message = showTerminal ? "Terminal shown" : "Terminal hidden";
+        case 'D':
+            // Duplicate current line (Ctrl+Shift+D like VS Code)
+            if (shift_pressed)
+            {
+                duplicateCurrentLine();
+            }
+            break;
+        case 'K':
+            // Delete current line (Ctrl+Shift+K like VS Code)
+            if (shift_pressed)
+            {
+                deleteCurrentLine();
+            }
+            break;
+        case 'G':
+            // Go to line (like VS Code Ctrl+G)
+            startGoToLine();
+            break;
+        case 'L':
+            // Select current line (like VS Code Ctrl+L)
+            selectCurrentLine();
+            break;
+        case VK_OEM_PLUS: // Plus key (+)
+            // Zoom in
+            increaseFontSize();
+            break;
+        case VK_OEM_MINUS: // Minus key (-)
+            // Zoom out
+            decreaseFontSize();
+            break;
+        case '0':
+            // Reset zoom
+            resetFontSize();
+            break;
+        case 'W':
+            // Close current pane/file
+            closePane();
+            break;
+        case 'P':
+            // Quick file open (like VS Code Ctrl+P)
+            startQuickOpen();
             break;
         case VK_OEM_3: // Backtick/Tilde key (`)
             // Quick terminal activation
@@ -203,6 +253,36 @@ void ModernTextEditor::handleKeyPress(WPARAM wParam)
         case '8':
         case '9':
             switchToPane(wParam - '1');
+            break;
+        case VK_PRIOR: // Page Up
+            if (shift_pressed)
+                updateSelection();
+            else
+                panes[active_pane].selection.clear();
+
+            {
+                int visible_lines = (panes[active_pane].rect.bottom - panes[active_pane].rect.top - 60) / (char_height + 2);
+                panes[active_pane].cursor_row -= visible_lines;
+                if (panes[active_pane].cursor_row < 0)
+                    panes[active_pane].cursor_row = 0;
+                panes[active_pane].cursor_col = std::min(panes[active_pane].cursor_col, (int)panes[active_pane].lines[panes[active_pane].cursor_row].length());
+                ensureCursorVisible();
+            }
+            break;
+        case VK_NEXT: // Page Down
+            if (shift_pressed)
+                updateSelection();
+            else
+                panes[active_pane].selection.clear();
+
+            {
+                int visible_lines = (panes[active_pane].rect.bottom - panes[active_pane].rect.top - 60) / (char_height + 2);
+                panes[active_pane].cursor_row += visible_lines;
+                if (panes[active_pane].cursor_row >= static_cast<int>(panes[active_pane].lines.size()))
+                    panes[active_pane].cursor_row = static_cast<int>(panes[active_pane].lines.size()) - 1;
+                panes[active_pane].cursor_col = std::min(panes[active_pane].cursor_col, (int)panes[active_pane].lines[panes[active_pane].cursor_row].length());
+                ensureCursorVisible();
+            }
             break;
         default:
             if (mode == INSERT_MODE)
@@ -242,6 +322,7 @@ void ModernTextEditor::handleInsertMode(WPARAM wParam)
             pane.cursor_row--;
             pane.cursor_col = pane.lines[pane.cursor_row].length();
         }
+        ensureCursorVisible();
         break;
 
     case VK_RIGHT:
@@ -259,6 +340,7 @@ void ModernTextEditor::handleInsertMode(WPARAM wParam)
             pane.cursor_row++;
             pane.cursor_col = 0;
         }
+        ensureCursorVisible();
         break;
 
     case VK_UP:
@@ -272,6 +354,7 @@ void ModernTextEditor::handleInsertMode(WPARAM wParam)
             pane.cursor_row--;
             pane.cursor_col = std::min(pane.cursor_col, (int)pane.lines[pane.cursor_row].length());
         }
+        ensureCursorVisible();
         break;
 
     case VK_DOWN:
@@ -285,6 +368,7 @@ void ModernTextEditor::handleInsertMode(WPARAM wParam)
             pane.cursor_row++;
             pane.cursor_col = std::min(pane.cursor_col, (int)pane.lines[pane.cursor_row].length());
         }
+        ensureCursorVisible();
         break;
 
     case VK_HOME:
@@ -293,6 +377,7 @@ void ModernTextEditor::handleInsertMode(WPARAM wParam)
         else
             pane.selection.clear();
         pane.cursor_col = 0;
+        ensureCursorVisible();
         break;
 
     case VK_END:
@@ -301,6 +386,7 @@ void ModernTextEditor::handleInsertMode(WPARAM wParam)
         else
             pane.selection.clear();
         pane.cursor_col = pane.lines[pane.cursor_row].length();
+        ensureCursorVisible();
         break;
 
     case VK_BACK:
@@ -481,11 +567,27 @@ void ModernTextEditor::handleChar(WPARAM wParam)
 
 void ModernTextEditor::insertText(const std::string &text)
 {
+    // Memory protection - çok büyük text insertion'ları engelley
+    if (text.length() > 1000)
+    {
+        status_message = "Text too large (max 1000 chars)";
+        return;
+    }
+
     saveUndoState("insert text");
     EditorPane &pane = panes[active_pane];
+
+    // Line length protection
+    if (pane.lines[pane.cursor_row].length() + text.length() > 5000)
+    {
+        status_message = "Line too long (max 5000 chars)";
+        return;
+    }
+
     pane.lines[pane.cursor_row].insert(pane.cursor_col, text);
     pane.cursor_col += text.length();
     pane.modified = true;
+    ensureCursorVisible();
 }
 
 void ModernTextEditor::updateSelection()
@@ -598,6 +700,7 @@ void ModernTextEditor::deleteSelection()
     pane.cursor_col = start_col;
     pane.selection.clear();
     pane.modified = true;
+    ensureCursorVisible();
 }
 
 void ModernTextEditor::copyToClipboard(const std::string &text)
@@ -692,6 +795,31 @@ void ModernTextEditor::executeCommand()
     else if (command_buffer == "close")
     {
         closePane();
+    }
+    else if (command_buffer.substr(0, 5) == "goto ")
+    {
+        // Go to line command
+        std::string lineNumStr = command_buffer.substr(5);
+        try
+        {
+            int lineNum = std::stoi(lineNumStr) - 1; // 1-based to 0-based
+            EditorPane &pane = panes[active_pane];
+            if (lineNum >= 0 && lineNum < static_cast<int>(pane.lines.size()))
+            {
+                pane.cursor_row = lineNum;
+                pane.cursor_col = 0;
+                ensureCursorVisible();
+                status_message = "Jumped to line " + std::to_string(lineNum + 1);
+            }
+            else
+            {
+                status_message = "Line number out of range (1-" + std::to_string(pane.lines.size()) + ")";
+            }
+        }
+        catch (...)
+        {
+            status_message = "Invalid line number";
+        }
     }
     else
     {
@@ -803,15 +931,25 @@ void ModernTextEditor::loadFile(const std::string &filename)
         EditorPane &pane = panes[active_pane];
         pane.lines.clear();
 
-        char buffer[1024];
-        while (fgets(buffer, sizeof(buffer), file))
+        char line[2048]; // Buffer boyutunu sınırla
+        int lineCount = 0;
+
+        while (fgets(line, sizeof(line), file) && lineCount < 10000) // Maksimum 10000 satır
         {
-            std::string line = buffer;
-            if (!line.empty() && line.back() == '\n')
-                line.pop_back();
-            if (!line.empty() && line.back() == '\r')
-                line.pop_back();
-            pane.lines.push_back(line);
+            std::string str_line = line;
+            if (!str_line.empty() && str_line.back() == '\n')
+                str_line.pop_back();
+            if (!str_line.empty() && str_line.back() == '\r')
+                str_line.pop_back();
+
+            // Line length protection
+            if (str_line.length() > 5000)
+            {
+                str_line = str_line.substr(0, 5000) + "... [line truncated]";
+            }
+
+            pane.lines.push_back(str_line);
+            lineCount++;
         }
 
         if (pane.lines.empty())
@@ -823,7 +961,15 @@ void ModernTextEditor::loadFile(const std::string &filename)
         pane.modified = false;
 
         fclose(file);
-        status_message = "File loaded: " + filename;
+
+        if (lineCount >= 10000)
+        {
+            status_message = "File loaded (truncated at 10000 lines): " + filename;
+        }
+        else
+        {
+            status_message = "File loaded: " + filename;
+        }
     }
     else
     {
@@ -1089,6 +1235,7 @@ void ModernTextEditor::handleMouseClick(int x, int y)
                 {
                     panes[i].cursor_row = clicked_line;
                     panes[i].cursor_col = std::min(clicked_col, (int)panes[i].lines[clicked_line].length());
+                    ensureCursorVisible();
                 }
             }
 
@@ -1134,6 +1281,7 @@ void ModernTextEditor::performSearch()
             pane.cursor_row = static_cast<int>(i);
             pane.cursor_col = static_cast<int>(pos);
             current_search_result = static_cast<int>(i);
+            ensureCursorVisible();
             status_message = "Found: " + search_text;
             return;
         }
@@ -1148,6 +1296,7 @@ void ModernTextEditor::performSearch()
             pane.cursor_row = static_cast<int>(i);
             pane.cursor_col = static_cast<int>(pos);
             current_search_result = static_cast<int>(i);
+            ensureCursorVisible();
             status_message = "Found: " + search_text;
             return;
         }
@@ -1170,6 +1319,7 @@ void ModernTextEditor::performReplace()
         current_line.replace(pos, search_text.length(), replace_text);
         pane.cursor_col = pos + replace_text.length();
         pane.modified = true;
+        ensureCursorVisible();
         status_message = "Replaced: " + search_text + " -> " + replace_text;
     }
     else
@@ -1190,10 +1340,10 @@ void ModernTextEditor::saveUndoState(const std::string &operation)
 
     undo_stack.push_back(state);
 
-    // Undo stack boyutunu sınırla
-    if (undo_stack.size() > static_cast<size_t>(max_undo_levels))
+    // Undo stack boyutunu sınırla (daha küçük)
+    if (undo_stack.size() > static_cast<size_t>(20)) // max_undo_levels yerine 20
     {
-        undo_stack.erase(undo_stack.begin());
+        undo_stack.erase(undo_stack.begin(), undo_stack.begin() + 10);
     }
 
     // Redo stack'i temizle
@@ -1278,6 +1428,14 @@ void ModernTextEditor::refreshFileExplorer()
 
 void ModernTextEditor::loadDirectory(const std::string &path, std::vector<FileItem> &items, int level)
 {
+    // Recursive depth protection - çok derin gitmesin
+    if (level > 3)
+        return;
+
+    // File count protection - çok fazla dosya yüklemesin
+    if (items.size() > 200)
+        return;
+
     WIN32_FIND_DATAA findData;
     std::string searchPath = path + "\\*";
     HANDLE hFind = FindFirstFileA(searchPath.c_str(), &findData);
@@ -1285,8 +1443,13 @@ void ModernTextEditor::loadDirectory(const std::string &path, std::vector<FileIt
     if (hFind == INVALID_HANDLE_VALUE)
         return;
 
+    int fileCount = 0;
     do
     {
+        // File count limit
+        if (fileCount++ > 100)
+            break;
+
         // . ve .. dizinlerini atla
         if (strcmp(findData.cFileName, ".") == 0 || strcmp(findData.cFileName, "..") == 0)
             continue;
@@ -1518,12 +1681,18 @@ void ModernTextEditor::executeTerminalCommand(const std::string &command)
     FILE *pipe = _popen(fullCommand.c_str(), "r");
     if (pipe)
     {
-        char buffer[1024];
+        char buffer[512]; // Buffer boyutunu küçültüldü
         std::string result;
+        int lineCount = 0;
 
-        while (fgets(buffer, sizeof(buffer), pipe) != nullptr)
+        while (fgets(buffer, sizeof(buffer), pipe) != nullptr && lineCount < 50) // Maksimum 50 satır
         {
             result += buffer;
+            lineCount++;
+
+            // Memory protection
+            if (result.length() > 10000)
+                break; // 10KB limit
         }
 
         int exitCode = _pclose(pipe);
@@ -1532,14 +1701,16 @@ void ModernTextEditor::executeTerminalCommand(const std::string &command)
         std::istringstream stream(result);
         std::string line;
         bool hasOutput = false;
+        int outputLines = 0;
 
-        while (std::getline(stream, line))
+        while (std::getline(stream, line) && outputLines < 30) // Maksimum 30 output line
         {
             // Carriage return karakterlerini temizle
             if (!line.empty() && line.back() == '\r')
                 line.pop_back();
             addTerminalOutput(line);
             hasOutput = true;
+            outputLines++;
         }
 
         if (!hasOutput)
@@ -1549,10 +1720,11 @@ void ModernTextEditor::executeTerminalCommand(const std::string &command)
             else
                 addTerminalOutput("Command failed with exit code: " + std::to_string(exitCode));
         }
-    }
-    else
-    {
-        addTerminalOutput("Error: Cannot execute command");
+
+        if (lineCount >= 50)
+        {
+            addTerminalOutput("... output truncated (too long)");
+        }
     }
 }
 
@@ -1560,10 +1732,10 @@ void ModernTextEditor::addTerminalOutput(const std::string &text)
 {
     terminal.output.push_back(text);
 
-    // Çok fazla satır varsa eski olanları sil
-    if (terminal.output.size() > 1000)
+    // Çok fazla satır varsa eski olanları sil (daha agresif)
+    if (terminal.output.size() > 100) // 1000'den 100'e düşürdük
     {
-        terminal.output.erase(terminal.output.begin(), terminal.output.begin() + 100);
+        terminal.output.erase(terminal.output.begin(), terminal.output.begin() + 50);
     }
 
     // Auto-scroll to bottom
@@ -1620,4 +1792,138 @@ void ModernTextEditor::handleFileExplorerClick(int x, int y)
             status_message = "Opened file: " + item.name;
         }
     }
+}
+
+// New utility functions
+void ModernTextEditor::duplicateCurrentLine()
+{
+    EditorPane &pane = panes[active_pane];
+    if (pane.cursor_row < static_cast<int>(pane.lines.size()))
+    {
+        saveUndoState("duplicate line");
+        std::string currentLine = pane.lines[pane.cursor_row];
+        pane.lines.insert(pane.lines.begin() + pane.cursor_row + 1, currentLine);
+        pane.cursor_row++;
+        pane.modified = true;
+        status_message = "Line duplicated";
+    }
+}
+
+void ModernTextEditor::deleteCurrentLine()
+{
+    EditorPane &pane = panes[active_pane];
+    if (pane.lines.size() > 1)
+    {
+        saveUndoState("delete line");
+        pane.lines.erase(pane.lines.begin() + pane.cursor_row);
+        if (pane.cursor_row >= static_cast<int>(pane.lines.size()))
+            pane.cursor_row = static_cast<int>(pane.lines.size()) - 1;
+        pane.cursor_col = 0;
+        pane.modified = true;
+        status_message = "Line deleted";
+    }
+}
+
+void ModernTextEditor::selectCurrentLine()
+{
+    EditorPane &pane = panes[active_pane];
+    pane.selection.active = true;
+    pane.selection.start_row = pane.cursor_row;
+    pane.selection.start_col = 0;
+    pane.selection.end_row = pane.cursor_row;
+    pane.selection.end_col = pane.lines[pane.cursor_row].length();
+    status_message = "Line selected";
+}
+
+void ModernTextEditor::startGoToLine()
+{
+    // Go to line mode - kullanıcı satır numarası girecek
+    mode = COMMAND_MODE;
+    command_buffer = "goto ";
+    status_message = "Go to line: ";
+}
+
+void ModernTextEditor::startQuickOpen()
+{
+    // Quick file open - basit file dialog
+    openFile();
+}
+
+void ModernTextEditor::increaseFontSize()
+{
+    DeleteObject(hFont);
+
+    // Font boyutunu artır (maksimum 24)
+    if (current_font_size < 24)
+        current_font_size += 2;
+
+    hFont = CreateFont(current_font_size, 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE,
+                       ANSI_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
+                       CLEARTYPE_QUALITY, FIXED_PITCH | FF_MODERN, TEXT("0xNerd Proto"));
+
+    calculateCharSize();
+    updatePaneLayout();
+    status_message = "Font size increased to " + std::to_string(current_font_size);
+}
+
+void ModernTextEditor::decreaseFontSize()
+{
+    DeleteObject(hFont);
+
+    // Font boyutunu azalt (minimum 8)
+    if (current_font_size > 8)
+        current_font_size -= 2;
+
+    hFont = CreateFont(current_font_size, 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE,
+                       ANSI_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
+                       CLEARTYPE_QUALITY, FIXED_PITCH | FF_MODERN, TEXT("0xNerd Proto"));
+
+    calculateCharSize();
+    updatePaneLayout();
+    status_message = "Font size decreased to " + std::to_string(current_font_size);
+}
+
+void ModernTextEditor::resetFontSize()
+{
+    DeleteObject(hFont);
+
+    // Font boyutunu sıfırla (varsayılan 16)
+    current_font_size = 16;
+
+    hFont = CreateFont(current_font_size, 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE,
+                       ANSI_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
+                       CLEARTYPE_QUALITY, FIXED_PITCH | FF_MODERN, TEXT("0xNerd Proto"));
+
+    calculateCharSize();
+    updatePaneLayout();
+    status_message = "Font size reset to " + std::to_string(current_font_size);
+}
+
+void ModernTextEditor::ensureCursorVisible()
+{
+    EditorPane &pane = panes[active_pane];
+
+    // Pane boyutlarını hesapla
+    int visible_lines = (pane.rect.bottom - pane.rect.top - 60) / (char_height + 2);
+
+    // Cursor üstte görünmüyor - yukarı scroll
+    if (pane.cursor_row < pane.scroll_top)
+    {
+        pane.scroll_top = pane.cursor_row;
+    }
+    // Cursor altta görünmüyor - aşağı scroll
+    else if (pane.cursor_row >= pane.scroll_top + visible_lines)
+    {
+        pane.scroll_top = pane.cursor_row - visible_lines + 1;
+    }
+
+    // Scroll sınırlarını kontrol et
+    if (pane.scroll_top < 0)
+        pane.scroll_top = 0;
+
+    int max_scroll = static_cast<int>(pane.lines.size()) - visible_lines;
+    if (max_scroll < 0)
+        max_scroll = 0;
+    if (pane.scroll_top > max_scroll)
+        pane.scroll_top = max_scroll;
 }

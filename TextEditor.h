@@ -122,6 +122,7 @@ private:
     HFONT hFont;
     int char_width;
     int char_height;
+    int current_font_size;
 
     // Renkler
     HBRUSH bg_brush;
@@ -194,4 +195,15 @@ public:
     void saveUndoState(const std::string &operation);
     void performUndo();
     void performRedo();
+
+    // New utility functions
+    void duplicateCurrentLine();
+    void deleteCurrentLine();
+    void selectCurrentLine();
+    void startGoToLine();
+    void startQuickOpen();
+    void increaseFontSize();
+    void decreaseFontSize();
+    void resetFontSize();
+    void ensureCursorVisible();
 };
