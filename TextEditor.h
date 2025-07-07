@@ -33,15 +33,17 @@ private:
     std::vector<EditorPane> panes;
     int active_pane;
     SplitDirection split_direction;
+    bool shift_pressed;
+    bool ctrl_pressed;
     std::string command_buffer;
     std::string status_message;
     std::string clipboard_data;
 
     // Search & Replace
-    std::string search_text;
-    std::string replace_text;
     bool search_mode;
     bool replace_mode;
+    std::string search_text;
+    std::string replace_text;
     int current_search_result;
 
     // Undo/Redo system
@@ -67,10 +69,6 @@ private:
     HBRUSH status_brush;
     HBRUSH cursor_brush;
     HBRUSH selection_brush;
-
-    // Shift tuşu durumu
-    bool shift_pressed;
-    bool ctrl_pressed;
 
 public:
     ModernTextEditor();

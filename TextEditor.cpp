@@ -12,7 +12,7 @@ ModernTextEditor::ModernTextEditor() : mode(INSERT_MODE), active_pane(0), split_
     // Font oluştur - 0xNerd Proto kalın
     hFont = CreateFont(16, 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE,
                        ANSI_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
-                       CLEARTYPE_QUALITY, FIXED_PITCH | FF_MODERN, "0xNerd Proto");
+                       CLEARTYPE_QUALITY, FIXED_PITCH | FF_MODERN, TEXT("0xNerd Proto"));
 
     // Siyah arka plan ve turuncu metin
     bg_brush = CreateSolidBrush(RGB(0, 0, 0));           // Tam siyah arka plan
@@ -186,9 +186,11 @@ void ModernTextEditor::handleInsertMode(WPARAM wParam)
         else
             pane.selection.clear();
 
-        if (pane.cursor_col < pane.lines[pane.cursor_row].length())
+        if (pane.cursor_col < static_cast<int>(pane.lines[pane.cursor_row].length()))
+        {
             pane.cursor_col++;
-        else if (pane.cursor_row < pane.lines.size() - 1)
+        }
+        else if (pane.cursor_row < static_cast<int>(pane.lines.size()) - 1)
         {
             pane.cursor_row++;
             pane.cursor_col = 0;
@@ -214,7 +216,7 @@ void ModernTextEditor::handleInsertMode(WPARAM wParam)
         else
             pane.selection.clear();
 
-        if (pane.cursor_row < pane.lines.size() - 1)
+        if (pane.cursor_row < static_cast<int>(pane.lines.size()) - 1)
         {
             pane.cursor_row++;
             pane.cursor_col = std::min(pane.cursor_col, (int)pane.lines[pane.cursor_row].length());
@@ -265,13 +267,13 @@ void ModernTextEditor::handleInsertMode(WPARAM wParam)
         {
             deleteSelection();
         }
-        else if (pane.cursor_col < pane.lines[pane.cursor_row].length())
+        else if (pane.cursor_col < static_cast<int>(pane.lines[pane.cursor_row].length()))
         {
             saveUndoState("delete");
             pane.lines[pane.cursor_row].erase(pane.cursor_col, 1);
             pane.modified = true;
         }
-        else if (pane.cursor_row < pane.lines.size() - 1)
+        else if (pane.cursor_row < static_cast<int>(pane.lines.size()) - 1)
         {
             saveUndoState("delete line");
             pane.lines[pane.cursor_row] += pane.lines[pane.cursor_row + 1];
@@ -655,8 +657,8 @@ void ModernTextEditor::closePane()
     if (panes.size() > 1)
     {
         panes.erase(panes.begin() + active_pane);
-        if (active_pane >= panes.size())
-            active_pane = panes.size() - 1;
+        if (static_cast<size_t>(active_pane) >= panes.size())
+            active_pane = static_cast<int>(panes.size()) - 1;
         updatePanes();
         updatePaneLayout();
     }
@@ -675,15 +677,15 @@ void ModernTextEditor::switchActivePane()
 
 void ModernTextEditor::updatePanes()
 {
-    for (int i = 0; i < panes.size(); i++)
+    for (size_t i = 0; i < panes.size(); i++)
     {
-        panes[i].is_active = (i == active_pane);
+        panes[i].is_active = (static_cast<int>(i) == active_pane);
     }
 }
 
 void ModernTextEditor::switchToPane(int pane_index)
 {
-    if (pane_index >= 0 && pane_index < panes.size())
+    if (pane_index >= 0 && static_cast<size_t>(pane_index) < panes.size())
     {
         active_pane = pane_index;
         updatePanes();
@@ -810,76 +812,69 @@ void ModernTextEditor::paint(HDC hdc)
     RECT client_rect;
     GetClientRect(hwnd, &client_rect);
 
-    // Arka planı koyu gri yap
-    FillRect(hdc, &client_rect, bg_brush);
+    // TAMAMEN SİYAH YAP - ZORLA!
+    HBRUSH pure_black = CreateSolidBrush(RGB(0, 0, 0));
+    FillRect(hdc, &client_rect, pure_black);
 
-    // Font seç ve metin ayarlarını yap
+    // Tüm HDC'yi siyah yap
+    SetBkMode(hdc, OPAQUE);
+    SetBkColor(hdc, RGB(0, 0, 0));
+
+    // Font seç
     SelectObject(hdc, hFont);
-    SetTextColor(hdc, RGB(255, 165, 0)); // Turuncu metin rengi
-    SetBkColor(hdc, RGB(0, 0, 0));       // Siyah arka plan
-    SetBkMode(hdc, TRANSPARENT);
 
     // Her pane'i çiz
-    for (int i = 0; i < panes.size(); i++)
+    for (size_t i = 0; i < panes.size(); i++)
     {
-        drawPane(hdc, panes[i], i);
+        // Pane alanını da zorla siyah yap
+        FillRect(hdc, &panes[i].rect, pure_black);
+        drawPane(hdc, panes[i], static_cast<int>(i));
     }
 
     // Status bar çiz
     drawStatusBar(hdc);
+
+    DeleteObject(pure_black);
 }
 
 void ModernTextEditor::drawPane(HDC hdc, const EditorPane &pane, int pane_index)
 {
-    // Pane'in içini koyu gri yap
-    FillRect(hdc, &pane.rect, bg_brush);
+    // PANE'İ TAMAMEN SİYAH YAP
+    HBRUSH total_black = CreateSolidBrush(RGB(0, 0, 0));
+    FillRect(hdc, &pane.rect, total_black);
 
-    // VS Code panel kenarları
-    HPEN border_pen = CreatePen(PS_SOLID,
-                                pane.is_active ? 2 : 1,
-                                pane.is_active ? RGB(0, 122, 204) : RGB(37, 37, 38));
-    HPEN old_pen = (HPEN)SelectObject(hdc, border_pen);
-
-    Rectangle(hdc, pane.rect.left, pane.rect.top, pane.rect.right, pane.rect.bottom);
-
-    // Pane başlığı
-    SetTextColor(hdc, RGB(0, 120, 215));
-    std::string title = pane.filename;
-    if (pane.modified)
-        title += " *";
-    if (pane.is_active)
-        title += " [ACTIVE]";
-
-    TextOut(hdc, pane.rect.left + 5, pane.rect.top + 5, title.c_str(), title.length());
+    // HDC ayarları - HER ŞEY SİYAH ARKA PLAN
+    SetBkMode(hdc, OPAQUE);
+    SetBkColor(hdc, RGB(0, 0, 0));
 
     // Metin içeriğini çiz
     int line_y = pane.rect.top + 30;
     int line_height = char_height + 2;
 
-    for (int i = pane.scroll_top; i < pane.lines.size() && line_y < pane.rect.bottom - line_height; i++)
+    for (size_t i = static_cast<size_t>(pane.scroll_top);
+         i < pane.lines.size() && line_y < pane.rect.bottom - line_height;
+         i++)
     {
         const std::string &line = pane.lines[i];
 
-        // Gri satır numarası
-        SetTextColor(hdc, RGB(128, 128, 128)); // Gri satır numarası
+        // TAMAMEN SİYAH SATIR ARKA PLANI
+        RECT full_line = {pane.rect.left, line_y, pane.rect.right, line_y + line_height};
+        FillRect(hdc, &full_line, total_black);
+
+        // Turuncu satır numarası
+        SetTextColor(hdc, RGB(255, 165, 0));
         std::string line_num = std::to_string(i + 1);
         while (line_num.length() < 4)
             line_num = " " + line_num;
-        TextOut(hdc, pane.rect.left + 5, line_y, line_num.c_str(), line_num.length());
+        TextOutA(hdc, pane.rect.left + 5, line_y, line_num.c_str(), line_num.length());
 
-        // Seçimi çiz
-        if (pane.selection.hasSelection())
-        {
-            drawSelection(hdc, pane, i, line_y);
-        }
-
-        // Turuncu metin
-        SetTextColor(hdc, RGB(255, 165, 0)); // Turuncu metin rengi
+        // Linux terminal yeşili metin
+        SetTextColor(hdc, RGB(0, 255, 0));
         int text_x = pane.rect.left + 50;
-        TextOut(hdc, text_x, line_y, line.c_str(), line.length());
+        TextOutA(hdc, text_x, line_y, line.c_str(), line.length());
 
         // Cursor çiz
-        if (pane.is_active && i == pane.cursor_row)
+        if (pane.is_active && static_cast<int>(i) == pane.cursor_row)
         {
             int cursor_x = text_x + (pane.cursor_col * char_width);
             RECT cursor_rect = {cursor_x, line_y, cursor_x + 2, line_y + line_height};
@@ -889,9 +884,7 @@ void ModernTextEditor::drawPane(HDC hdc, const EditorPane &pane, int pane_index)
         line_y += line_height;
     }
 
-    // Seçili kalemi geri yükle ve sil
-    SelectObject(hdc, old_pen);
-    DeleteObject(border_pen);
+    DeleteObject(total_black);
 }
 
 void ModernTextEditor::drawSelection(HDC hdc, const EditorPane &pane, int current_line, int line_y)
@@ -930,8 +923,9 @@ void ModernTextEditor::drawStatusBar(HDC hdc)
 
     FillRect(hdc, &status_rect, status_brush);
 
+    SetBkMode(hdc, OPAQUE);
     SetTextColor(hdc, RGB(255, 255, 255));
-    SetBkMode(hdc, TRANSPARENT);
+    SetBkColor(hdc, RGB(0, 122, 204)); // Status bar arka planı mavi
 
     EditorPane &current_pane = panes[active_pane];
     std::string left_status = "Ln " + std::to_string(current_pane.cursor_row + 1) +
@@ -946,7 +940,7 @@ void ModernTextEditor::drawStatusBar(HDC hdc)
         left_status += " | " + status_message;
     }
 
-    TextOut(hdc, 10, status_rect.top + 5, left_status.c_str(), left_status.length());
+    TextOutA(hdc, 10, status_rect.top + 5, left_status.c_str(), left_status.length());
 
     std::string mode_info = (mode == INSERT_MODE) ? "-- INSERT --" : "-- COMMAND --";
     if (mode == COMMAND_MODE && !command_buffer.empty())
@@ -954,9 +948,9 @@ void ModernTextEditor::drawStatusBar(HDC hdc)
         mode_info = "-- COMMAND: " + command_buffer + " --";
     }
     SIZE text_size;
-    GetTextExtentPoint32(hdc, mode_info.c_str(), mode_info.length(), &text_size);
-    TextOut(hdc, client_rect.right - text_size.cx - 10, status_rect.top + 5,
-            mode_info.c_str(), mode_info.length());
+    GetTextExtentPoint32A(hdc, mode_info.c_str(), mode_info.length(), &text_size);
+    TextOutA(hdc, client_rect.right - text_size.cx - 10, status_rect.top + 5,
+             mode_info.c_str(), mode_info.length());
 }
 
 void ModernTextEditor::handleResize()
@@ -968,7 +962,7 @@ void ModernTextEditor::handleResize()
 void ModernTextEditor::handleMouseClick(int x, int y)
 {
     // Hangi pane'e tıklandığını bul
-    for (int i = 0; i < panes.size(); i++)
+    for (size_t i = 0; i < panes.size(); i++)
     {
         if (x >= panes[i].rect.left && x <= panes[i].rect.right &&
             y >= panes[i].rect.top && y <= panes[i].rect.bottom)
@@ -988,7 +982,7 @@ void ModernTextEditor::handleMouseClick(int x, int y)
                 int clicked_line = (y - line_y) / line_height + panes[i].scroll_top;
                 int clicked_col = (x - text_x) / char_width;
 
-                if (clicked_line >= 0 && clicked_line < panes[i].lines.size())
+                if (clicked_line >= 0 && static_cast<size_t>(clicked_line) < panes[i].lines.size())
                 {
                     panes[i].cursor_row = clicked_line;
                     panes[i].cursor_col = std::min(clicked_col, (int)panes[i].lines[clicked_line].length());
@@ -1023,34 +1017,34 @@ void ModernTextEditor::startReplace()
 
 void ModernTextEditor::performSearch()
 {
-    if (search_text.empty())
-        return;
-
     EditorPane &pane = panes[active_pane];
     int start_row = pane.cursor_row;
-    int start_col = pane.cursor_col + 1;
+    int start_col = pane.cursor_col;
 
     // Mevcut satırdan arama başlat
-    for (int i = start_row; i < pane.lines.size(); i++)
+    for (size_t i = static_cast<size_t>(start_row); i < pane.lines.size(); i++)
     {
-        size_t pos = pane.lines[i].find(search_text, (i == start_row) ? start_col : 0);
+        size_t search_start = (static_cast<int>(i) == start_row) ? static_cast<size_t>(start_col) : 0;
+        size_t pos = pane.lines[i].find(search_text, search_start);
         if (pos != std::string::npos)
         {
-            pane.cursor_row = i;
-            pane.cursor_col = pos;
+            pane.cursor_row = static_cast<int>(i);
+            pane.cursor_col = static_cast<int>(pos);
+            current_search_result = static_cast<int>(i);
             status_message = "Found: " + search_text;
             return;
         }
     }
 
     // Baştan arama yap
-    for (int i = 0; i <= start_row; i++)
+    for (size_t i = 0; i <= static_cast<size_t>(start_row); i++)
     {
         size_t pos = pane.lines[i].find(search_text, 0);
-        if (pos != std::string::npos && (i < start_row || pos < start_col))
+        if (pos != std::string::npos && (i < static_cast<size_t>(start_row) || pos < static_cast<size_t>(start_col)))
         {
-            pane.cursor_row = i;
-            pane.cursor_col = pos;
+            pane.cursor_row = static_cast<int>(i);
+            pane.cursor_col = static_cast<int>(pos);
+            current_search_result = static_cast<int>(i);
             status_message = "Found: " + search_text;
             return;
         }
@@ -1067,8 +1061,8 @@ void ModernTextEditor::performReplace()
     EditorPane &pane = panes[active_pane];
     std::string &current_line = pane.lines[pane.cursor_row];
 
-    size_t pos = current_line.find(search_text, pane.cursor_col);
-    if (pos == pane.cursor_col)
+    size_t pos = current_line.find(search_text, static_cast<size_t>(pane.cursor_col));
+    if (pos == static_cast<size_t>(pane.cursor_col))
     {
         current_line.replace(pos, search_text.length(), replace_text);
         pane.cursor_col = pos + replace_text.length();
@@ -1094,7 +1088,7 @@ void ModernTextEditor::saveUndoState(const std::string &operation)
     undo_stack.push_back(state);
 
     // Undo stack boyutunu sınırla
-    if (undo_stack.size() > max_undo_levels)
+    if (undo_stack.size() > static_cast<size_t>(max_undo_levels))
     {
         undo_stack.erase(undo_stack.begin());
     }
