@@ -24,6 +24,55 @@ enum SplitDirection
     HORIZONTAL_SPLIT
 };
 
+// File Explorer için dosya türü
+enum FileType
+{
+    FILE_TYPE_FOLDER,
+    FILE_TYPE_TEXT,
+    FILE_TYPE_CPP,
+    FILE_TYPE_HEADER,
+    FILE_TYPE_PYTHON,
+    FILE_TYPE_JAVASCRIPT,
+    FILE_TYPE_OTHER
+};
+
+// File Explorer item
+struct FileItem
+{
+    std::string name;
+    std::string fullPath;
+    FileType type;
+    bool isExpanded;
+    int level;
+    std::vector<FileItem> children;
+
+    FileItem() : type(FILE_TYPE_OTHER), isExpanded(false), level(0) {}
+};
+
+// File Explorer panel
+struct FileExplorer
+{
+    RECT rect;
+    std::vector<FileItem> items;
+    int scrollTop;
+    int selectedIndex;
+    std::string currentPath;
+
+    FileExplorer() : scrollTop(0), selectedIndex(-1) {}
+};
+
+// Terminal panel
+struct Terminal
+{
+    RECT rect;
+    std::vector<std::string> output;
+    std::string currentInput;
+    int scrollTop;
+    bool isActive;
+
+    Terminal() : scrollTop(0), isActive(false) {}
+};
+
 // Ana editör sınıfı
 class ModernTextEditor
 {
@@ -38,6 +87,16 @@ private:
     std::string command_buffer;
     std::string status_message;
     std::string clipboard_data;
+
+    // New UI components
+    FileExplorer fileExplorer;
+    Terminal terminal;
+    bool showFileExplorer;
+    bool showTerminal;
+
+    // Layout dimensions
+    int fileExplorerWidth;
+    int terminalHeight;
 
     // Search & Replace
     bool search_mode;
@@ -69,6 +128,8 @@ private:
     HBRUSH status_brush;
     HBRUSH cursor_brush;
     HBRUSH selection_brush;
+    HBRUSH explorer_brush;
+    HBRUSH terminal_brush;
 
 public:
     ModernTextEditor();
@@ -108,6 +169,20 @@ public:
     void drawStatusBar(HDC hdc);
     void handleResize();
     void handleMouseClick(int x, int y);
+
+    // New methods for file explorer and terminal
+    void initializeFileExplorer();
+    void refreshFileExplorer();
+    void drawFileExplorer(HDC hdc);
+    void handleFileExplorerClick(int x, int y);
+    void loadDirectory(const std::string &path, std::vector<FileItem> &items, int level);
+    FileType getFileType(const std::string &filename);
+
+    void drawTerminal(HDC hdc);
+    void handleTerminalInput(char ch);
+    void executeTerminalCommand(const std::string &command);
+    void addTerminalOutput(const std::string &text);
+    void handleTerminalClick(int x, int y);
 
     // Search & Replace functions
     void startSearch();

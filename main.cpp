@@ -1,7 +1,7 @@
 #include "TextEditor.h"
 
 // Pencere sınıfı adı
-const char *WINDOW_CLASS = "ModernTextEditor";
+const char *WINDOW_CLASS = "Glitch";
 
 // Global editör instance
 ModernTextEditor *g_editor = nullptr;
@@ -114,7 +114,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
     // Pencere oluştur
     HWND hwnd = CreateWindow(
         WINDOW_CLASS,
-        "Modern Text Editor - Search & Replace + Undo/Redo",
+        "Glitch IDE",
         WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN,
         CW_USEDEFAULT, CW_USEDEFAULT,
         1200, 800,

@@ -1,6 +1,10 @@
 #include "TextEditor.h"
+#include <cstring> // strcmp için
+#include <iostream>
+#include <sstream>
 
 ModernTextEditor::ModernTextEditor() : mode(INSERT_MODE), active_pane(0), split_direction(VERTICAL_SPLIT), shift_pressed(false), ctrl_pressed(false),
+                                       showFileExplorer(true), showTerminal(true), fileExplorerWidth(200), terminalHeight(150),
                                        search_mode(false), replace_mode(false), current_search_result(-1), max_undo_levels(100)
 {
     // İlk pane'i oluştur
@@ -14,14 +18,24 @@ ModernTextEditor::ModernTextEditor() : mode(INSERT_MODE), active_pane(0), split_
                        ANSI_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
                        CLEARTYPE_QUALITY, FIXED_PITCH | FF_MODERN, TEXT("0xNerd Proto"));
 
-    // Siyah arka plan ve turuncu metin
+    // Siyah arka plan ve renkler
     bg_brush = CreateSolidBrush(RGB(0, 0, 0));           // Tam siyah arka plan
     status_brush = CreateSolidBrush(RGB(0, 122, 204));   // Mavi status bar
     cursor_brush = CreateSolidBrush(RGB(255, 165, 0));   // Turuncu cursor
     selection_brush = CreateSolidBrush(RGB(40, 62, 86)); // Seçim rengi
+    explorer_brush = CreateSolidBrush(RGB(30, 30, 30));  // Koyu gri file explorer
+    terminal_brush = CreateSolidBrush(RGB(20, 20, 20));  // Daha koyu terminal
 
     // Karakter boyutlarını hesapla
     calculateCharSize();
+
+    // File explorer'ı başlat
+    initializeFileExplorer();
+
+    // Terminal'i başlat
+    terminal.output.push_back("Glitch IDE Terminal v1.0");
+    terminal.output.push_back("Type 'help' for available commands");
+    terminal.output.push_back("");
 }
 
 ModernTextEditor::~ModernTextEditor()
@@ -31,6 +45,8 @@ ModernTextEditor::~ModernTextEditor()
     DeleteObject(status_brush);
     DeleteObject(cursor_brush);
     DeleteObject(selection_brush);
+    DeleteObject(explorer_brush);
+    DeleteObject(terminal_brush);
 }
 
 void ModernTextEditor::setHwnd(HWND h)
@@ -56,31 +72,62 @@ void ModernTextEditor::updatePaneLayout()
     RECT client_rect;
     GetClientRect(hwnd, &client_rect);
 
-    int pane_count = panes.size();
     int status_height = char_height + 10;
+    int current_left = 0;
+    int current_top = 0;
+    int available_width = client_rect.right;
+    int available_height = client_rect.bottom - status_height;
 
-    if (split_direction == VERTICAL_SPLIT)
+    // File Explorer layout (sol taraf)
+    if (showFileExplorer)
     {
-        // Vertical split: paneller yan yana
-        int pane_width = client_rect.right / pane_count;
-        for (int i = 0; i < pane_count; i++)
-        {
-            panes[i].rect.left = i * pane_width;
-            panes[i].rect.right = (i + 1) * pane_width;
-            panes[i].rect.top = 0;
-            panes[i].rect.bottom = client_rect.bottom - status_height;
-        }
+        fileExplorer.rect.left = 0;
+        fileExplorer.rect.right = fileExplorerWidth;
+        fileExplorer.rect.top = 0;
+        fileExplorer.rect.bottom = available_height;
+
+        current_left = fileExplorerWidth;
+        available_width -= fileExplorerWidth;
     }
-    else
+
+    // Terminal layout (alt kısım)
+    if (showTerminal)
     {
-        // Horizontal split: paneller alt alta
-        int pane_height = (client_rect.bottom - status_height) / pane_count;
-        for (int i = 0; i < pane_count; i++)
+        terminal.rect.left = current_left;
+        terminal.rect.right = client_rect.right;
+        terminal.rect.top = available_height - terminalHeight;
+        terminal.rect.bottom = available_height;
+
+        available_height -= terminalHeight;
+    }
+
+    // Editor panes layout (ortada kalan alan)
+    int pane_count = panes.size();
+    if (pane_count > 0)
+    {
+        if (split_direction == VERTICAL_SPLIT)
         {
-            panes[i].rect.left = 0;
-            panes[i].rect.right = client_rect.right;
-            panes[i].rect.top = i * pane_height;
-            panes[i].rect.bottom = (i + 1) * pane_height;
+            // Vertical split: paneller yan yana
+            int pane_width = available_width / pane_count;
+            for (int i = 0; i < pane_count; i++)
+            {
+                panes[i].rect.left = current_left + (i * pane_width);
+                panes[i].rect.right = current_left + ((i + 1) * pane_width);
+                panes[i].rect.top = current_top;
+                panes[i].rect.bottom = current_top + available_height;
+            }
+        }
+        else
+        {
+            // Horizontal split: paneller alt alta
+            int pane_height = available_height / pane_count;
+            for (int i = 0; i < pane_count; i++)
+            {
+                panes[i].rect.left = current_left;
+                panes[i].rect.right = current_left + available_width;
+                panes[i].rect.top = current_top + (i * pane_height);
+                panes[i].rect.bottom = current_top + ((i + 1) * pane_height);
+            }
         }
     }
 }
@@ -128,6 +175,23 @@ void ModernTextEditor::handleKeyPress(WPARAM wParam)
             break;
         case 'H':
             startReplace();
+            break;
+        case 'B':
+            // Toggle file explorer (like VS Code)
+            showFileExplorer = !showFileExplorer;
+            updatePaneLayout();
+            status_message = showFileExplorer ? "File Explorer shown" : "File Explorer hidden";
+            break;
+        case 'T':
+            // Toggle terminal
+            showTerminal = !showTerminal;
+            updatePaneLayout();
+            status_message = showTerminal ? "Terminal shown" : "Terminal hidden";
+            break;
+        case VK_OEM_3: // Backtick/Tilde key (`)
+            // Quick terminal activation
+            terminal.isActive = !terminal.isActive;
+            status_message = terminal.isActive ? "Terminal activated" : "Terminal deactivated";
             break;
         case '1':
         case '2':
@@ -371,6 +435,14 @@ void ModernTextEditor::handleCommandMode(WPARAM wParam)
 
 void ModernTextEditor::handleChar(WPARAM wParam)
 {
+    // Terminal aktifse terminal input'u handle et
+    if (terminal.isActive)
+    {
+        handleTerminalInput((char)wParam);
+        InvalidateRect(hwnd, NULL, FALSE);
+        return;
+    }
+
     if (search_mode && wParam != VK_RETURN && wParam != VK_ESCAPE)
     {
         search_text += (char)wParam;
@@ -823,12 +895,24 @@ void ModernTextEditor::paint(HDC hdc)
     // Font seç
     SelectObject(hdc, hFont);
 
-    // Her pane'i çiz
+    // File Explorer çiz (sol taraf)
+    if (showFileExplorer)
+    {
+        drawFileExplorer(hdc);
+    }
+
+    // Editor panes çiz (orta alan)
     for (size_t i = 0; i < panes.size(); i++)
     {
         // Pane alanını da zorla siyah yap
         FillRect(hdc, &panes[i].rect, pure_black);
         drawPane(hdc, panes[i], static_cast<int>(i));
+    }
+
+    // Terminal çiz (alt kısım)
+    if (showTerminal)
+    {
+        drawTerminal(hdc);
     }
 
     // Status bar çiz
@@ -961,7 +1045,25 @@ void ModernTextEditor::handleResize()
 
 void ModernTextEditor::handleMouseClick(int x, int y)
 {
-    // Hangi pane'e tıklandığını bul
+    // File Explorer'a tıklama kontrolü
+    if (showFileExplorer && x >= fileExplorer.rect.left && x <= fileExplorer.rect.right &&
+        y >= fileExplorer.rect.top && y <= fileExplorer.rect.bottom)
+    {
+        handleFileExplorerClick(x, y);
+        InvalidateRect(hwnd, NULL, FALSE);
+        return;
+    }
+
+    // Terminal'e tıklama kontrolü
+    if (showTerminal && x >= terminal.rect.left && x <= terminal.rect.right &&
+        y >= terminal.rect.top && y <= terminal.rect.bottom)
+    {
+        handleTerminalClick(x, y);
+        InvalidateRect(hwnd, NULL, FALSE);
+        return;
+    }
+
+    // Editor pane'lere tıklama kontrolü
     for (size_t i = 0; i < panes.size(); i++)
     {
         if (x >= panes[i].rect.left && x <= panes[i].rect.right &&
@@ -970,7 +1072,8 @@ void ModernTextEditor::handleMouseClick(int x, int y)
             // Bu pane'i aktif yap
             active_pane = i;
             updatePanes();
-            status_message = "Clicked on pane " + std::to_string(i + 1);
+            terminal.isActive = false; // Terminal'i deaktif et
+            status_message = "Editor pane " + std::to_string(i + 1) + " activated";
 
             // Cursor pozisyonunu güncelle
             int text_x = panes[i].rect.left + 50;
@@ -1155,4 +1258,366 @@ void ModernTextEditor::performRedo()
     pane.modified = true;
 
     status_message = "Redone: " + last_state.operation;
+}
+
+// File Explorer functions
+void ModernTextEditor::initializeFileExplorer()
+{
+    // Mevcut dizini al
+    char currentDir[MAX_PATH];
+    GetCurrentDirectoryA(MAX_PATH, currentDir);
+    fileExplorer.currentPath = currentDir;
+    refreshFileExplorer();
+}
+
+void ModernTextEditor::refreshFileExplorer()
+{
+    fileExplorer.items.clear();
+    loadDirectory(fileExplorer.currentPath, fileExplorer.items, 0);
+}
+
+void ModernTextEditor::loadDirectory(const std::string &path, std::vector<FileItem> &items, int level)
+{
+    WIN32_FIND_DATAA findData;
+    std::string searchPath = path + "\\*";
+    HANDLE hFind = FindFirstFileA(searchPath.c_str(), &findData);
+
+    if (hFind == INVALID_HANDLE_VALUE)
+        return;
+
+    do
+    {
+        // . ve .. dizinlerini atla
+        if (strcmp(findData.cFileName, ".") == 0 || strcmp(findData.cFileName, "..") == 0)
+            continue;
+
+        FileItem item;
+        item.name = findData.cFileName;
+        item.fullPath = path + "\\" + findData.cFileName;
+        item.level = level;
+
+        if (findData.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)
+        {
+            item.type = FILE_TYPE_FOLDER;
+            item.isExpanded = false;
+        }
+        else
+        {
+            item.type = getFileType(findData.cFileName);
+        }
+
+        items.push_back(item);
+    } while (FindNextFileA(hFind, &findData));
+
+    FindClose(hFind);
+}
+
+FileType ModernTextEditor::getFileType(const std::string &filename)
+{
+    size_t dot = filename.find_last_of('.');
+    if (dot == std::string::npos)
+        return FILE_TYPE_OTHER;
+
+    std::string ext = filename.substr(dot + 1);
+
+    if (ext == "cpp" || ext == "cc" || ext == "cxx")
+        return FILE_TYPE_CPP;
+    else if (ext == "h" || ext == "hpp" || ext == "hxx")
+        return FILE_TYPE_HEADER;
+    else if (ext == "py")
+        return FILE_TYPE_PYTHON;
+    else if (ext == "js" || ext == "ts")
+        return FILE_TYPE_JAVASCRIPT;
+    else if (ext == "txt" || ext == "md" || ext == "log")
+        return FILE_TYPE_TEXT;
+    else
+        return FILE_TYPE_OTHER;
+}
+
+void ModernTextEditor::drawFileExplorer(HDC hdc)
+{
+    // File explorer arka planını çiz
+    FillRect(hdc, &fileExplorer.rect, explorer_brush);
+
+    // Başlık çiz
+    SetBkMode(hdc, OPAQUE);
+    SetBkColor(hdc, RGB(30, 30, 30));
+    SetTextColor(hdc, RGB(200, 200, 200));
+
+    std::string title = "FILE EXPLORER";
+    TextOutA(hdc, fileExplorer.rect.left + 5, fileExplorer.rect.top + 5, title.c_str(), title.length());
+
+    // Mevcut dizin
+    std::string currentPath = "Path: " + fileExplorer.currentPath;
+    TextOutA(hdc, fileExplorer.rect.left + 5, fileExplorer.rect.top + 25, currentPath.c_str(), currentPath.length());
+
+    // Dosya listesi
+    int y = fileExplorer.rect.top + 50;
+    int line_height = char_height + 2;
+
+    for (size_t i = static_cast<size_t>(fileExplorer.scrollTop);
+         i < fileExplorer.items.size() && y < fileExplorer.rect.bottom - line_height;
+         i++)
+    {
+        const FileItem &item = fileExplorer.items[i];
+
+        // Seçili item arka planı
+        if (static_cast<int>(i) == fileExplorer.selectedIndex)
+        {
+            RECT selRect = {fileExplorer.rect.left, y, fileExplorer.rect.right, y + line_height};
+            HBRUSH selBrush = CreateSolidBrush(RGB(50, 100, 150));
+            FillRect(hdc, &selRect, selBrush);
+            DeleteObject(selBrush);
+        }
+
+        // Indent for level
+        int x_offset = fileExplorer.rect.left + 5 + (item.level * 15);
+
+        // Icon ve text rengi
+        COLORREF textColor = RGB(200, 200, 200);
+        std::string prefix = "";
+
+        switch (item.type)
+        {
+        case FILE_TYPE_FOLDER:
+            prefix = item.isExpanded ? "[+] " : "[-] ";
+            textColor = RGB(255, 255, 100);
+            break;
+        case FILE_TYPE_CPP:
+            prefix = "[C] ";
+            textColor = RGB(100, 150, 255);
+            break;
+        case FILE_TYPE_HEADER:
+            prefix = "[H] ";
+            textColor = RGB(150, 100, 255);
+            break;
+        case FILE_TYPE_PYTHON:
+            prefix = "[P] ";
+            textColor = RGB(100, 255, 100);
+            break;
+        case FILE_TYPE_JAVASCRIPT:
+            prefix = "[J] ";
+            textColor = RGB(255, 255, 100);
+            break;
+        default:
+            prefix = "[F] ";
+            break;
+        }
+
+        SetTextColor(hdc, textColor);
+        std::string displayName = prefix + item.name;
+        TextOutA(hdc, x_offset, y, displayName.c_str(), displayName.length());
+
+        y += line_height;
+    }
+}
+
+// Terminal functions
+void ModernTextEditor::drawTerminal(HDC hdc)
+{
+    // Terminal arka planını çiz
+    FillRect(hdc, &terminal.rect, terminal_brush);
+
+    // Başlık çiz
+    SetBkMode(hdc, OPAQUE);
+    SetBkColor(hdc, RGB(20, 20, 20));
+    SetTextColor(hdc, RGB(0, 255, 0)); // Terminal yeşili
+
+    std::string title = "TERMINAL";
+    TextOutA(hdc, terminal.rect.left + 5, terminal.rect.top + 5, title.c_str(), title.length());
+
+    // Terminal output çiz
+    int y = terminal.rect.top + 25;
+    int line_height = char_height + 2;
+
+    // Output lines
+    for (size_t i = static_cast<size_t>(terminal.scrollTop);
+         i < terminal.output.size() && y < terminal.rect.bottom - line_height * 2;
+         i++)
+    {
+        SetTextColor(hdc, RGB(200, 200, 200));
+        TextOutA(hdc, terminal.rect.left + 5, y, terminal.output[i].c_str(), terminal.output[i].length());
+        y += line_height;
+    }
+
+    // Current input line
+    if (terminal.isActive)
+    {
+        SetTextColor(hdc, RGB(0, 255, 0));
+        std::string prompt = "> " + terminal.currentInput;
+        TextOutA(hdc, terminal.rect.left + 5, terminal.rect.bottom - line_height - 5,
+                 prompt.c_str(), prompt.length());
+
+        // Cursor
+        int cursor_x = terminal.rect.left + 5 + (prompt.length() * char_width);
+        RECT cursor_rect = {cursor_x, terminal.rect.bottom - line_height - 5,
+                            cursor_x + 2, terminal.rect.bottom - 5};
+        FillRect(hdc, &cursor_rect, cursor_brush);
+    }
+}
+
+void ModernTextEditor::handleTerminalInput(char ch)
+{
+    if (ch == '\r' || ch == '\n')
+    {
+        // Enter tuşu - komutu çalıştır
+        std::string command = terminal.currentInput;
+        terminal.output.push_back("> " + command);
+        executeTerminalCommand(command);
+        terminal.currentInput.clear();
+    }
+    else if (ch == '\b')
+    {
+        // Backspace
+        if (!terminal.currentInput.empty())
+            terminal.currentInput.pop_back();
+    }
+    else if (ch >= 32 && ch <= 126)
+    {
+        // Normal karakter
+        terminal.currentInput += ch;
+    }
+}
+
+void ModernTextEditor::executeTerminalCommand(const std::string &command)
+{
+    if (command.empty())
+        return;
+
+    // Özel terminal komutları
+    if (command == "help")
+    {
+        addTerminalOutput("Glitch IDE Terminal Commands:");
+        addTerminalOutput("  help     - Show this help");
+        addTerminalOutput("  clear    - Clear terminal");
+        addTerminalOutput("  exit     - Deactivate terminal");
+        addTerminalOutput("");
+        addTerminalOutput("All other commands are executed via PowerShell/CMD");
+        return;
+    }
+    else if (command == "clear")
+    {
+        terminal.output.clear();
+        addTerminalOutput("Terminal cleared");
+        return;
+    }
+    else if (command == "exit")
+    {
+        terminal.isActive = false;
+        addTerminalOutput("Terminal deactivated");
+        return;
+    }
+
+    // Gerçek sistem komutlarını çalıştır
+    std::string fullCommand;
+
+    // Windows üzerinde PowerShell kullan
+    fullCommand = "powershell.exe -Command \"" + command + "\" 2>&1";
+
+    // Pipe ile komutu çalıştır
+    FILE *pipe = _popen(fullCommand.c_str(), "r");
+    if (pipe)
+    {
+        char buffer[1024];
+        std::string result;
+
+        while (fgets(buffer, sizeof(buffer), pipe) != nullptr)
+        {
+            result += buffer;
+        }
+
+        int exitCode = _pclose(pipe);
+
+        // Çıktıyı satır satır ekle
+        std::istringstream stream(result);
+        std::string line;
+        bool hasOutput = false;
+
+        while (std::getline(stream, line))
+        {
+            // Carriage return karakterlerini temizle
+            if (!line.empty() && line.back() == '\r')
+                line.pop_back();
+            addTerminalOutput(line);
+            hasOutput = true;
+        }
+
+        if (!hasOutput)
+        {
+            if (exitCode == 0)
+                addTerminalOutput("Command executed successfully");
+            else
+                addTerminalOutput("Command failed with exit code: " + std::to_string(exitCode));
+        }
+    }
+    else
+    {
+        addTerminalOutput("Error: Cannot execute command");
+    }
+}
+
+void ModernTextEditor::addTerminalOutput(const std::string &text)
+{
+    terminal.output.push_back(text);
+
+    // Çok fazla satır varsa eski olanları sil
+    if (terminal.output.size() > 1000)
+    {
+        terminal.output.erase(terminal.output.begin(), terminal.output.begin() + 100);
+    }
+
+    // Auto-scroll to bottom
+    int visible_lines = (terminal.rect.bottom - terminal.rect.top - 30) / (char_height + 2);
+    if (static_cast<int>(terminal.output.size()) > visible_lines)
+    {
+        terminal.scrollTop = static_cast<int>(terminal.output.size()) - visible_lines;
+    }
+}
+
+void ModernTextEditor::handleTerminalClick(int x, int y)
+{
+    // Terminal alanına tıklandığında aktif yap
+    if (x >= terminal.rect.left && x <= terminal.rect.right &&
+        y >= terminal.rect.top && y <= terminal.rect.bottom)
+    {
+        terminal.isActive = true;
+        status_message = "Terminal activated - Type commands";
+    }
+    else
+    {
+        terminal.isActive = false;
+    }
+}
+
+void ModernTextEditor::handleFileExplorerClick(int x, int y)
+{
+    if (x < fileExplorer.rect.left || x > fileExplorer.rect.right ||
+        y < fileExplorer.rect.top || y > fileExplorer.rect.bottom)
+        return;
+
+    // Hangi dosya/klasöre tıklandığını bul
+    int clicked_y = y - fileExplorer.rect.top - 50;
+    int line_height = char_height + 2;
+    int clicked_index = fileExplorer.scrollTop + (clicked_y / line_height);
+
+    if (clicked_index >= 0 && clicked_index < static_cast<int>(fileExplorer.items.size()))
+    {
+        fileExplorer.selectedIndex = clicked_index;
+        FileItem &item = fileExplorer.items[clicked_index];
+
+        if (item.type == FILE_TYPE_FOLDER)
+        {
+            // Klasöre çift tıklama - dizin değiştir
+            fileExplorer.currentPath = item.fullPath;
+            SetCurrentDirectoryA(fileExplorer.currentPath.c_str());
+            refreshFileExplorer();
+            status_message = "Changed directory to: " + item.name;
+        }
+        else
+        {
+            // Dosya - editörde aç
+            loadFile(item.fullPath);
+            status_message = "Opened file: " + item.name;
+        }
+    }
 }
