@@ -114,7 +114,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
     // Pencere oluştur
     HWND hwnd = CreateWindow(
         WINDOW_CLASS,
-        "Glitch IDE",
+        "Glitch IDE - Modern Text Editor",
         WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN,
         CW_USEDEFAULT, CW_USEDEFAULT,
         1200, 800,

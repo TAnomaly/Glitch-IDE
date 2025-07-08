@@ -5,19 +5,19 @@
 
 ModernTextEditor::ModernTextEditor() : mode(INSERT_MODE), active_pane(0), split_direction(VERTICAL_SPLIT), shift_pressed(false), ctrl_pressed(false),
                                        showFileExplorer(true), showTerminal(true), fileExplorerWidth(200), terminalHeight(150),
-                                       search_mode(false), replace_mode(false), current_search_result(-1), max_undo_levels(100),
+                                       search_mode(false), replace_mode(false), current_search_result(-1), max_undo_levels(10),
                                        current_font_size(16)
 {
     // İlk pane'i oluştur
     panes.push_back(EditorPane());
     panes[0].is_active = true;
 
-    // Vector'lar için memory reserve et
-    panes.reserve(10);               // Maksimum 10 pane
-    undo_stack.reserve(25);          // Undo stack için
-    redo_stack.reserve(25);          // Redo stack için
-    terminal.output.reserve(150);    // Terminal output için
-    fileExplorer.items.reserve(250); // File explorer için
+    // Vector'lar için memory reserve et - Çok konservatif limitler
+    panes.reserve(5);                // Maksimum 5 pane (daha az)
+    undo_stack.reserve(10);          // Undo stack için (daha az)
+    redo_stack.reserve(10);          // Redo stack için (daha az)
+    terminal.output.reserve(50);     // Terminal output için (daha az)
+    fileExplorer.items.reserve(100); // File explorer için (daha az)
 
     status_message = "INSERT MODE - Ctrl+C: Copy, Ctrl+V: Paste, Ctrl+A: Select All";
 
@@ -568,9 +568,9 @@ void ModernTextEditor::handleChar(WPARAM wParam)
 void ModernTextEditor::insertText(const std::string &text)
 {
     // Memory protection - çok büyük text insertion'ları engelley
-    if (text.length() > 1000)
+    if (text.length() > 500) // Daha küçük limit
     {
-        status_message = "Text too large (max 1000 chars)";
+        status_message = "Text too large (max 500 chars)";
         return;
     }
 
@@ -578,9 +578,9 @@ void ModernTextEditor::insertText(const std::string &text)
     EditorPane &pane = panes[active_pane];
 
     // Line length protection
-    if (pane.lines[pane.cursor_row].length() + text.length() > 5000)
+    if (pane.lines[pane.cursor_row].length() + text.length() > 1000) // Daha kısa limit
     {
-        status_message = "Line too long (max 5000 chars)";
+        status_message = "Line too long (max 1000 chars)";
         return;
     }
 
@@ -934,7 +934,7 @@ void ModernTextEditor::loadFile(const std::string &filename)
         char line[2048]; // Buffer boyutunu sınırla
         int lineCount = 0;
 
-        while (fgets(line, sizeof(line), file) && lineCount < 10000) // Maksimum 10000 satır
+        while (fgets(line, sizeof(line), file) && lineCount < 5000) // Maksimum 5000 satır
         {
             std::string str_line = line;
             if (!str_line.empty() && str_line.back() == '\n')
@@ -943,9 +943,9 @@ void ModernTextEditor::loadFile(const std::string &filename)
                 str_line.pop_back();
 
             // Line length protection
-            if (str_line.length() > 5000)
+            if (str_line.length() > 1000) // Daha kısa satır limiti
             {
-                str_line = str_line.substr(0, 5000) + "... [line truncated]";
+                str_line = str_line.substr(0, 1000) + "... [line truncated]";
             }
 
             pane.lines.push_back(str_line);
@@ -962,9 +962,9 @@ void ModernTextEditor::loadFile(const std::string &filename)
 
         fclose(file);
 
-        if (lineCount >= 10000)
+        if (lineCount >= 5000)
         {
-            status_message = "File loaded (truncated at 10000 lines): " + filename;
+            status_message = "File loaded (truncated at 5000 lines): " + filename;
         }
         else
         {
@@ -1340,10 +1340,10 @@ void ModernTextEditor::saveUndoState(const std::string &operation)
 
     undo_stack.push_back(state);
 
-    // Undo stack boyutunu sınırla (daha küçük)
-    if (undo_stack.size() > static_cast<size_t>(20)) // max_undo_levels yerine 20
+    // Undo stack boyutunu sınırla (çok küçük)
+    if (undo_stack.size() > static_cast<size_t>(10)) // Maksimum 10 undo
     {
-        undo_stack.erase(undo_stack.begin(), undo_stack.begin() + 10);
+        undo_stack.erase(undo_stack.begin(), undo_stack.begin() + 5);
     }
 
     // Redo stack'i temizle
@@ -1433,7 +1433,7 @@ void ModernTextEditor::loadDirectory(const std::string &path, std::vector<FileIt
         return;
 
     // File count protection - çok fazla dosya yüklemesin
-    if (items.size() > 200)
+    if (items.size() > 50) // Daha az dosya limiti
         return;
 
     WIN32_FIND_DATAA findData;
@@ -1447,7 +1447,7 @@ void ModernTextEditor::loadDirectory(const std::string &path, std::vector<FileIt
     do
     {
         // File count limit
-        if (fileCount++ > 100)
+        if (fileCount++ > 30) // Daha az dosya per directory
             break;
 
         // . ve .. dizinlerini atla
@@ -1685,14 +1685,14 @@ void ModernTextEditor::executeTerminalCommand(const std::string &command)
         std::string result;
         int lineCount = 0;
 
-        while (fgets(buffer, sizeof(buffer), pipe) != nullptr && lineCount < 50) // Maksimum 50 satır
+        while (fgets(buffer, sizeof(buffer), pipe) != nullptr && lineCount < 20) // Maksimum 20 satır
         {
             result += buffer;
             lineCount++;
 
             // Memory protection
-            if (result.length() > 10000)
-                break; // 10KB limit
+            if (result.length() > 5000) // 5KB limit
+                break;
         }
 
         int exitCode = _pclose(pipe);
@@ -1703,7 +1703,7 @@ void ModernTextEditor::executeTerminalCommand(const std::string &command)
         bool hasOutput = false;
         int outputLines = 0;
 
-        while (std::getline(stream, line) && outputLines < 30) // Maksimum 30 output line
+        while (std::getline(stream, line) && outputLines < 15) // Maksimum 15 output line
         {
             // Carriage return karakterlerini temizle
             if (!line.empty() && line.back() == '\r')
@@ -1721,7 +1721,7 @@ void ModernTextEditor::executeTerminalCommand(const std::string &command)
                 addTerminalOutput("Command failed with exit code: " + std::to_string(exitCode));
         }
 
-        if (lineCount >= 50)
+        if (lineCount >= 20)
         {
             addTerminalOutput("... output truncated (too long)");
         }
@@ -1732,10 +1732,10 @@ void ModernTextEditor::addTerminalOutput(const std::string &text)
 {
     terminal.output.push_back(text);
 
-    // Çok fazla satır varsa eski olanları sil (daha agresif)
-    if (terminal.output.size() > 100) // 1000'den 100'e düşürdük
+    // Çok fazla satır varsa eski olanları sil (en agresif)
+    if (terminal.output.size() > 30) // 100'den 30'a düşürdük
     {
-        terminal.output.erase(terminal.output.begin(), terminal.output.begin() + 50);
+        terminal.output.erase(terminal.output.begin(), terminal.output.begin() + 15);
     }
 
     // Auto-scroll to bottom
